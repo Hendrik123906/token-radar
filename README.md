@@ -47,7 +47,14 @@ byte-identical.
 ## Layout
 
 - `main.ts` — entry point: snapshot in, board + dashboard + dossier out.
-- `lib/model.ts` — the radar-2 model: parsing, scoring, farm plans, the board.
+- `lib/model.ts` — the radar-3 model: parsing, scoring, farm plans, the board. Every row
+  now carries a confidence score (0..1) for how much evidence backs its implied value:
+  live comparables behind its category multiple, a recorded 7-day TVL change, a known
+  listing date. Confidence never moves the ranking; it is reported beside the value.
+- `lib/validate.ts` — the board's own check: the confidence distribution, and how far the
+  top ten move when the model's constants are nudged one step each way. Run it with
+  `MAKEFUN_OUTPUT_DIR=out node main.ts --input path/to/snapshot.json --validate` — it
+  prints a JSON report and changes nothing the plain run writes.
 - `vendor/makefun-board.ts` — the make.fun dossier library, shipped byte for byte.
 - `dashboard/` — the static page (`index.html`, `app.css`, `app.js`).
 - `screenshots/` — the three submission screenshots (board, detail, filtered).

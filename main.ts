@@ -1,10 +1,13 @@
 // Token Radar's entry point (Node 22, standard library only).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the radar-2 model in lib/model.ts, writes the ranked board to
+// pre-token protocol with the radar-3 model in lib/model.ts, writes the ranked board to
 // /output/board.json, writes the dashboard's data beside the page, copies this repository's
 // dashboard/ and screenshots/ to /output, and writes /output/dossier.json with the vendored
 // make.fun library — the same library the scorer rebuilds the dossier from, so the two must agree.
+//
+// --validate prints lib/validate.ts's report for the board to stdout and changes nothing
+// else: the board, the data and the dossier stay exactly as a plain run writes them.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -13,6 +16,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { validateBoard } from './lib/validate.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -44,6 +48,11 @@ const issue = boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
   process.exit(1);
+}
+
+// --validate reports on the board and changes nothing it writes.
+if (process.argv.includes('--validate')) {
+  process.stdout.write(`${JSON.stringify(validateBoard(board, snapshot), null, 2)}\n`);
 }
 
 mkdirSync(out, { recursive: true });

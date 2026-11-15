@@ -1,4 +1,4 @@
-// The token radar's model, version radar-2: one snapshot of the protocol universe in, one ranked board out.
+// The token radar's model, version radar-3: one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
@@ -25,6 +25,13 @@
 // No protocol name is ever special-cased: the same function scores every row, and every factor is
 // computed from the sealed snapshot at run time, so the same program scores a future snapshot the
 // same way and finds launches that do not exist yet.
+//
+// A fifth signal, confidence, scores how much evidence backs each row's implied value:
+// how many live comparables back its category multiple, whether its 7-day TVL change was
+// recorded, and whether its listing date is known. Confidence never moves the ranking: it
+// is reported beside the value so a thin-evidence row cannot pass for a sure thing.
+// lib/validate.ts checks the board against the same evidence and reports how far the top
+// ten move when the model's constants are nudged.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -83,7 +90,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 260;
@@ -121,6 +128,9 @@ export interface BoardRow {
     maturity_multiplier: number;
     breadth_multiplier: number;
     age_days: number | null;
+    confidence: number;
+    comparables: number;
+    confidence_reasons: string[];
   };
   farm_steps: string[];
 }
@@ -142,6 +152,8 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   breadth_multiplier: number;
+  confidence: number;
+  comparables: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -269,6 +281,57 @@ export function impliedValue(
   return { implied, categoryMultiple, growthPct, growthMult, maturityMult, breadthMult, age };
 }
 
+/** How much evidence backs one row's implied value: the score, the counts behind it, and why it lost points. */
+export interface Confidence {
+  score: number;
+  comparables: number;
+  hasGrowth: boolean;
+  hasAge: boolean;
+  reasons: string[];
+}
+
+/**
+ * The live comparables behind every category multiple: the count of live-token protocols
+ * whose market-cap-to-TVL ratio feeds the category's median (exchanges excluded, same rule
+ * as categoryMultiples). A category the snapshot barely prices gets a thin count, and the
+ * confidence score says so instead of hiding it.
+ */
+export function categoryEvidence(snapshot: Snapshot): Map<string, number> {
+  const counts = new Map<string, number>();
+  let all = 0;
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null || p.tvl_usd <= 0 || p.category === 'CEX') continue;
+    const ratio = p.mcap_usd / p.tvl_usd;
+    if (!Number.isFinite(ratio) || ratio < 0) continue;
+    all += 1;
+    const key = p.category ?? 'Other';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  counts.set('__global__', all);
+  return counts;
+}
+
+/**
+ * The confidence score for one protocol: evidence for its multiple, its growth and its age.
+ * The multiple carries half the score (it sets the level), growth and age a quarter each.
+ * A missing 7-day change counts as half credit (the model guessed flat); an unknown listing
+ * date counts the same (the model guessed one year). The score is rounded to three decimals
+ * so the same snapshot always prints the same number.
+ */
+export function confidenceFor(protocol: SnapshotProtocol, comparables: number, model: ModelConstants = MODEL): Confidence {
+  const reasons: string[] = [];
+  const multipleCredit = Math.min(comparables / model.min_comparables, 1);
+  if (comparables < model.min_comparables) {
+    reasons.push(`only ${comparables} live comparable${comparables === 1 ? '' : 's'} back the category multiple (needs ${model.min_comparables})`);
+  }
+  const hasGrowth = protocol.change_7d !== null && Number.isFinite(protocol.change_7d);
+  if (!hasGrowth) reasons.push('no 7-day TVL change recorded, growth assumed flat');
+  const hasAge = protocol.listed_at !== null && Number.isFinite(Date.parse(`${protocol.listed_at}T00:00:00Z`));
+  if (!hasAge) reasons.push('listing date unknown, age assumed one year');
+  const score = Math.round((0.5 * multipleCredit + 0.25 * (hasGrowth ? 1 : 0.5) + 0.25 * (hasAge ? 1 : 0.5)) * 1000) / 1000;
+  return { score, comparables, hasGrowth, hasAge, reasons };
+}
+
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
@@ -298,6 +361,7 @@ export interface BoardSummary {
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
   const multiples = categoryMultiples(snapshot, model);
+  const evidence = categoryEvidence(snapshot);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
@@ -316,7 +380,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, multiples, model);
-    return { p, ...v };
+    const c = confidenceFor(p, evidence.get(p.category ?? 'Other') ?? 0, model);
+    return { p, ...v, confidence: c };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -343,6 +408,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       maturity_multiplier: s.maturityMult,
       breadth_multiplier: s.breadthMult,
       age_days: s.age,
+      confidence: s.confidence.score,
+      comparables: s.confidence.comparables,
+      confidence_reasons: s.confidence.reasons,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
   }));
@@ -476,6 +544,8 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     breadth_multiplier: row.model.breadth_multiplier,
+    confidence: row.model.confidence,
+    comparables: row.model.comparables,
   };
 }
 
