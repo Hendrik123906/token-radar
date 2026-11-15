@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Konfirmasi Pin Payout make.fun — Token Radar</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0b0f14; color: #e6edf3; font: 400 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 24px 18px 48px; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { color: #8b98a5; margin: 0 0 16px; }
+  .box { background: #131a22; border: 1px solid #26313d; border-radius: 12px; padding: 16px; margin: 16px 0; word-break: break-word; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.6; color: #e6edf3; }
+  .label { color: #8b98a5; font-size: 12px; margin-bottom: 6px; }
+  button { display: block; width: 100%; min-height: 48px; margin: 10px 0; border: 0; border-radius: 10px; background: #2fd47c; color: #06130c; font: 600 16px/1.2 system-ui, sans-serif; cursor: pointer; }
+  button.secondary { background: #18222d; color: #e6edf3; border: 1px solid #26313d; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .ok { color: #2fd47c; }
+  .warn { color: #f0a832; }
+  .err { color: #ff6b5e; }
+  .hidden { display: none; }
+  textarea { width: 100%; min-height: 96px; background: #0b0f14; border: 1px solid #26313d; border-radius: 8px; color: #e6edf3; font-family: ui-monospace, monospace; font-size: 12px; padding: 10px; resize: vertical; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Konfirmasi Pin Payout make.fun</h1>
+  <p><b>Langkah terakhir, buruan — pesan ini kedaluwarsa 5 menit.</b> Halaman ini cuma minta wallet OKX lo menandatangani <b>satu pesan konfirmasi</b> di bawah. Tidak minta seed phrase, tidak minta private key, tidak ada biaya / gas. Pesan ini mengonfirmasi pin hadiah Token Radar ($1.325) ke wallet OKX lo (DxW1...).</p>
+
+  <div class="label">Pesan yang ditandatangani (baca dulu sebelum sign):</div>
+  <div class="box mono" id="msg">make.fun account change v1; Change: pin this account's rewards to the wallet DxW1uoduzWd3eNqLfKar6froyHzai8gNbAR78GT7dr8t (agent 8JXdDGWnder9nR6ZqViVx3e5cqWxan3rMUrvTivRHcvp, competition token-radar-01, until 2027-02-12T23:34:18.192Z); Domain: make.fun; Account: @bambang-hendri; Wallet: DxW1uoduzWd3eNqLfKar6froyHzai8gNbAR78GT7dr8t; Chain ID: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp; Nonce: 423db2e5250b55e08ad3d55681953b53; Issued At: 2026-11-15T00:03:04.511Z; Expiration Time: 2026-11-15T00:08:04.511Z</div>
+
+  <div id="status"><p>Wallet belum terhubung.</p></div>
+  <button id="connectBtn" type="button">1. Hubungkan OKX Wallet</button>
+  <button id="signBtn" type="button" disabled>2. Tanda Tangani Konfirmasi</button>
+
+  <div id="result" class="hidden">
+    <div class="label">Wallet yang menandatangani:</div>
+    <div class="box mono" id="signer"></div>
+    <div class="label">Signature (base58 — kirim yang ini ke agen):</div>
+    <textarea id="sig58" readonly></textarea>
+    <button id="copy58" type="button" class="secondary">Salin Signature (base58)</button>
+    <div class="label">Signature (base64 — cadangan, kalau base58 tidak diterima):</div>
+    <textarea id="sig64" readonly></textarea>
+    <button id="copy64" type="button" class="secondary">Salin Signature (base64)</button>
+    <p class="ok">Berhasil! Kirim signature base58 di atas ke agen (chat) SECEPATNYA — nanti agen yang selesaikan pin-nya dan submit Token Radar.</p>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  var EXPECTED = 'DxW1uoduzWd3eNqLfKar6froyHzai8gNbAR78GT7dr8t';
+  var msg = document.getElementById('msg').textContent;
+  var statusEl = document.getElementById('status');
+  var connectBtn = document.getElementById('connectBtn');
+  var signBtn = document.getElementById('signBtn');
+  var resultEl = document.getElementById('result');
+  var provider = null;
+
+  // Base58 (Bitcoin alphabet), no dependency.
+  var ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  function base58(bytes) {
+    var digits = [0];
+    for (var i = 0; i < bytes.length; i++) {
+      var carry = bytes[i];
+      for (var j = 0; j < digits.length; j++) {
+        carry += digits[j] * 256;
+        digits[j] = carry % 58;
+        carry = Math.floor(carry / 58);
+      }
+      while (carry > 0) { digits.push(carry % 58); carry = Math.floor(carry / 58); }
+    }
+    var out = '';
+    for (var k = 0; k < bytes.length && bytes[k] === 0; k++) out += '1';
+    for (var m = digits.length - 1; m >= 0; m--) out += ALPHABET[digits[m]];
+    return out;
+  }
+  function base64(bytes) {
+    var bin = '';
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  function setStatus(html) { statusEl.innerHTML = '<p>' + html + '</p>'; }
+  function findProvider() {
+    if (window.okxwallet && window.okxwallet.solana) return window.okxwallet.solana;
+    if (window.solana) return window.solana;
+    return null;
+  }
+  function copyText(id, btn) {
+    var ta = document.getElementById(id);
+    ta.select();
+    var done = function () { btn.textContent = 'Disalin!'; setTimeout(function () { btn.textContent = btn.id === 'copy58' ? 'Salin Signature (base58)' : 'Salin Signature (base64)'; }, 2000); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(ta.value).then(done, function () { document.execCommand('copy'); done(); });
+    } else { document.execCommand('copy'); done(); }
+  }
+
+  connectBtn.addEventListener('click', function () {
+    provider = findProvider();
+    if (!provider) {
+      setStatus('<span class="err">Wallet tidak ditemukan di browser ini.</span> Buka halaman ini dari <b>browser bawaan aplikasi OKX</b> (OKX &rarr; Discover / Browser &rarr; tempel link ini), atau dari browser yang sudah terpasang ekstensi OKX Wallet.');
+      return;
+    }
+    provider.connect().then(function () {
+      var addr = provider.publicKey ? provider.publicKey.toString() : '(tidak diketahui)';
+      if (addr === EXPECTED) {
+        setStatus('<span class="ok">Terhubung: ' + addr + ' (wallet OKX lo, benar).</span>');
+      } else {
+        setStatus('<span class="warn">Terhubung: ' + addr + ' — INI BUKAN DxW1. Ganti ke wallet OKX DxW1 dulu sebelum sign, kalau tidak pin-nya tidak berlaku.</span>');
+      }
+      signBtn.disabled = false;
+    }).catch(function (e) {
+      setStatus('<span class="err">Gagal terhubung: ' + (e && e.message ? e.message : e) + '</span>');
+    });
+  });
+
+  signBtn.addEventListener('click', function () {
+    if (!provider) return;
+    signBtn.disabled = true;
+    setStatus('Menunggu persetujuan sign di OKX...');
+    var bytes = new TextEncoder().encode(msg);
+    provider.signMessage(bytes).then(function (res) {
+      var sig = res.signature;
+      var addr = provider.publicKey ? provider.publicKey.toString() : (res.publicKey ? res.publicKey.toString() : '(tidak diketahui)');
+      document.getElementById('signer').textContent = addr;
+      document.getElementById('sig58').value = base58(sig);
+      document.getElementById('sig64').value = base64(sig);
+      resultEl.classList.remove('hidden');
+      if (addr === EXPECTED) setStatus('<span class="ok">Pesan ditandatangani oleh DxW1. Salin signature di bawah dan kirim ke agen.</span>');
+      else setStatus('<span class="warn">Pesan ditandatangani oleh ' + addr + ', bukan DxW1. Pin tidak akan berlaku untuk hadiah ke DxW1 — hubungkan wallet DxW1 dan sign ulang.</span>');
+      signBtn.disabled = false;
+    }).catch(function (e) {
+      setStatus('<span class="err">Sign dibatalkan / gagal: ' + (e && e.message ? e.message : e) + '</span>');
+      signBtn.disabled = false;
+    });
+  });
+
+  document.getElementById('copy58').addEventListener('click', function () { copyText('sig58', this); });
+  document.getElementById('copy64').addEventListener('click', function () { copyText('sig64', this); });
+})();
+</script>
+</body>
+</html>
